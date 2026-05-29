@@ -3,6 +3,7 @@ name = "depth-uncertainty-slam"
 version = "0.1.0"
 requires-python = ">=3.12"
 dependencies = [
+    "enlighten>=1.14.1",
     "gtsam>=4.3a0",
     "matplotlib>=3.10.9",
     "numpy>=2.4.4",
@@ -11,6 +12,7 @@ dependencies = [
     "pandas>=3.0.2",
     "pillow>=12.2.0",
     "pyarrow>=24.0.0",
+    "pycolmap>=4.0.4",
     "scikit-learn>=1.8.0",
     "scipy>=1.17.1",
     "seaborn>=0.13.2",

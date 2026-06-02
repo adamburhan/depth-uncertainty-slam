@@ -20,7 +20,8 @@ def load_dataset(config):
             frames=frames,
             sequence_dir=seq_path,
             image_dir=seq_path / "results",
-            K=K
+            K=K,
+            cam=cam,
         )
     else:
         raise ValueError(f"Unsupported dataset: {dataset_name}")

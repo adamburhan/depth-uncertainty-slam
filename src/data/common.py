@@ -15,3 +15,4 @@ class Dataset:
     sequence_dir: Path
     image_dir: Path
     K: np.ndarray
+    cam: dict

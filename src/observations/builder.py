@@ -4,6 +4,7 @@ from pathlib import Path
 from collections import defaultdict
 import sqlite3
 import numpy as np
+from dataclasses import dataclass
 
 @dataclass
 class Observation:
@@ -13,7 +14,6 @@ class Observation:
     depth: float          # depth at keypoint location
     ambiguous: bool       # near depth discontinuity
     depth_alt: float | None = None  # second depth hypothesis if ambiguous
-
 
 def pair_id_to_image_ids(pair_id):
     """From colmap documentation: https://colmap.github.io/database.html"""
@@ -27,85 +27,46 @@ def build_img_id_to_frame_id(database_path) -> dict[int, int]:
     conn.close()
     return {img_id: int(name[5:11]) for img_id, name in rows}
 
-def run_colmap_frontend(database_path, image_path):
+def run_colmap_frontend(database_path, image_path, cam):
     if database_path.exists():
         database_path.unlink()
+    reader_options = pycolmap.ImageReaderOptions()
+    reader_options.camera_model = "PINHOLE"
+    reader_options.camera_params = f"{cam['fx']},{cam['fy']},{cam['cx']},{cam['cy']}"
     pycolmap.set_random_seed(0)
-    pycolmap.extract_features(database_path, str(image_path))
-    pycolmap.match_exhaustive(database_path)
+    pycolmap.extract_features(
+        database_path,
+        str(image_path),
+        camera_mode=pycolmap.CameraMode.SINGLE,
+        reader_options=reader_options,
+    )
+    verification_options = pycolmap.TwoViewGeometryOptions()
+    verification_options.compute_relative_pose = True
+    pycolmap.match_exhaustive(database_path, verification_options=verification_options)
 
-def load_keypoints(database_path) -> dict[int, np.ndarray]:
-    """Returns {image_id: (N, 2) array of (u, v) coordinates}"""
-    conn = sqlite3.connect(str(database_path))
-    rows = conn.execute(
-        "SELECT image_id, rows, cols, data FROM keypoints"
-    ).fetchall()
-    conn.close()
-    keypoints = {}
-    for image_id, n_kps, cols, data in rows:
-        kps = np.frombuffer(data, dtype=np.float32).reshape(n_kps, cols)
-        keypoints[image_id] = kps[:, :2]  # only (u, v), drop scale/orientation
-    return keypoints
-
-def load_two_view_matches(database_path) -> dict[tuple[int,int], np.ndarray]:
-    conn = sqlite3.connect(str(database_path))
-    rows = conn.execute(
-        "SELECT pair_id, rows, data FROM two_view_geometries WHERE rows > 0"
-    ).fetchall()
-    conn.close()
-    two_view_matches = {}
-    for pair_id, n_matches, data in rows:
-        img_id1, img_id2 = pair_id_to_image_ids(pair_id)
-        matches = np.frombuffer(data, dtype=np.uint32).reshape(n_matches, 2)
-        two_view_matches[(img_id1, img_id2)] = matches
-    return two_view_matches
-
-def build_tracks(two_view_matches) -> dict[int, list]:
-    """
-    Returns:
-        tracks = {
-            landmark_id: [(img_id, kp_idx), ...],
-            ...
-        }
-    Invalid tracks (multiple observations from same image) are filtered out.
-    """
-    parent = {}
-
-    def find(x):
-        if x not in parent:
-            parent[x] = x
-        while parent[x] != x:
-            parent[x] = parent[parent[x]]
-            x = parent[x]
-        return x
-
-    def union(x, y):
-        parent[find(x)] = find(y)
-
-    for (img1, img2), matches in two_view_matches.items():
-        for kp1, kp2 in matches:
-            union((img1, int(kp1)), (img2, int(kp2)))
-
-    component_to_id = {}
-    tracks = defaultdict(list)
-    for node in parent:
-        root = find(node)
-        if root not in component_to_id:
-            component_to_id[root] = len(component_to_id)
-        tracks[component_to_id[root]].append(node)
-
-    # filter invalid tracks: multiple keypoints from same image
-    valid_tracks = {}
-    n_invalid = 0
-    for landmark_id, obs in tracks.items():
-        image_ids = [img for img, kp in obs]
-        if len(image_ids) == len(set(image_ids)):
-            valid_tracks[landmark_id] = obs
-        else:
-            n_invalid += 1
-    print(f"Tracks: {len(valid_tracks)} valid, {n_invalid} invalid (filtered)")
-
-    return valid_tracks
+def seed_reconstruction(cam, frames, name_to_img_id):
+    rec = pycolmap.Reconstruction()
+    camera = pycolmap.Camera.create_from_model_name(1, "PINHOLE", cam["fx"], cam["w"], cam["h"])
+    camera.params = [cam["fx"], cam["fy"], cam["cx"], cam["cy"]]
+    camera.camera_id = 1
+    rec.add_camera_with_trivial_rig(camera)
+    for f in frames:
+        img_name = f"frame{f.frame_id:06d}.jpg"
+        img_id = name_to_img_id[img_name]
+        
+        # Replica pose_gt is cam-to-world, need world-to-cam
+        R_wc = f.pose_gt[:3, :3].astype(np.float64)
+        t_wc = f.pose_gt[:3, 3].astype(np.float64)
+        R_cw = R_wc.T
+        t_cw = -R_wc.T @ t_wc
+        cam_from_world = pycolmap.Rigid3d(pycolmap.Rotation3d(R_cw), t_cw)
+        
+        im = pycolmap.Image()
+        im.image_id = img_id
+        im.name = img_name
+        im.camera_id = 1
+        rec.add_image_with_trivial_frame(im, cam_from_world)
+    return rec
 
 def build_observations(dataset, config):
     database_path = dataset.sequence_dir / "database.db"
@@ -122,39 +83,34 @@ def build_observations(dataset, config):
     else:
         image_path = dataset.image_dir
 
-    run_colmap_frontend(database_path, image_path)
+    run_colmap_frontend(database_path, image_path, dataset.cam)
 
-    keypoints = load_keypoints(database_path)
-    two_view_matches = load_two_view_matches(database_path)
+    name_to_img_id = {n: i for i, n in
+                      sqlite3.connect(str(database_path)).execute("SELECT image_id, name FROM images")}
+
+    rec = seed_reconstruction(dataset.cam, dataset.frames, name_to_img_id)  # frames carry image_id + GT pose
+    out = dataset.sequence_dir / "tri_model"; out.mkdir(exist_ok=True)
+    rec = pycolmap.triangulate_points(rec, str(database_path), str(image_path), str(out))
+
     img_id_to_frame_id = build_img_id_to_frame_id(database_path)
-    tracks = build_tracks(two_view_matches)
-
     frame_id_to_frame = {f.frame_id: f for f in dataset.frames}
 
     observations = []
-    for landmark_id, obs in tracks.items():
-        for img_id, kp_idx in obs:
-            frame_id = img_id_to_frame_id[img_id]
-            frame = frame_id_to_frame[frame_id]
-            uv = keypoints[img_id][kp_idx]
-            u, v = int(round(uv[0])), int(round(uv[1]))
-            depth = float(frame.depth[v, u])
-
-            if depth == 0.0:
-                continue  # invalid depth
-
-            # TODO: implement depth discontinuity heuristic
-            ambiguous = False
-            depth_alt = None
-
-            observations.append(Observation(
-                frame_id=frame_id,
-                landmark_id=landmark_id,
-                uv=uv,
-                depth=depth,
-                ambiguous=ambiguous,
-                depth_alt=depth_alt,
-            ))
-
-    print(f"Total observations: {len(observations)}")
-    return observations
+    landmark_xyz = {}                       
+    for lm_id, p3d in rec.points3D.items():
+        recs = []
+        for e in p3d.track.elements:
+            frame = frame_id_to_frame[img_id_to_frame_id[e.image_id]]
+            uv = rec.images[e.image_id].points2D[e.point2D_idx].xy
+            assert frame.depth.shape == (dataset.cam["h"], dataset.cam["w"])
+            u = min(int(np.floor(uv[0])), frame.depth.shape[1] - 1) 
+            v = min(int(np.floor(uv[1])), frame.depth.shape[0] - 1)
+            d = float(frame.depth[v, u])
+            if d == 0.0:
+                continue
+            recs.append(Observation(frame.frame_id, lm_id, uv, d, ambiguous=False, depth_alt=None))
+        if len(recs) >= 2:                  # guard: track must survive depth filtering with >=2 obs
+            observations.extend(recs)
+            landmark_xyz[lm_id] = p3d.xyz
+    print(f"Landmarks: {len(landmark_xyz)}, observations: {len(observations)}")
+    return observations, landmark_xyz

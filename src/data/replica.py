@@ -27,24 +27,24 @@ def load_gt_poses(seq_path: Path) -> np.ndarray:
     gt_poses = gt_poses.reshape(-1, 4, 4).astype(np.float32)
     return gt_poses
 
-def load_seq(seq_path: Path, K: np.ndarray, depth_scale: float) -> list[FrameData]:
+def load_seq(seq_path: Path, depth_scale: float, 
+             stride: int = 1, max_frames: int | None = None) -> list[FrameData]:
     if not seq_path.is_dir():
         raise ValueError(f"Sequence path {seq_path} is not a directory")
-    
     gt_poses = load_gt_poses(seq_path)
-
     frame_ids = sorted([int(p.stem[5:]) for p in (seq_path / "results").glob("frame*.jpg")])
+    frame_ids = frame_ids[::stride]
+    if max_frames is not None:
+        frame_ids = frame_ids[:max_frames]
     frames = []
     for frame_id in frame_ids:
         img, depth = load_frame(seq_path, frame_id, depth_scale)
-        frame_data = FrameData(
+        frames.append(FrameData(
             frame_id=frame_id,
             image=img,
             depth=depth,
             pose_gt=gt_poses[frame_id],
-            K=K
-        )
-        frames.append(frame_data)
+        ))
     return frames
 
 
@@ -52,7 +52,7 @@ if __name__ == "__main__":
     data_path = Path("/home/adam/scratch/datasets/replica/Replica")
     K, cam = load_K(data_path)
     seq_path = data_path / "office0" 
-    frames = load_seq(seq_path, K, depth_scale=cam["scale"])
+    frames = load_seq(seq_path, depth_scale=cam["scale"], stride=10) 
     print(f"Loaded {len(frames)} frames")
     
     f = frames[0]

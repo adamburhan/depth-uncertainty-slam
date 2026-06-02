@@ -1,18 +1,33 @@
-from data.loader import load_dataset
-from observations.builder import build_observations
-from initialization.init import initialize
-from optimization.ba import optimize
-from evaluation.metrics import evaluate
+from .data.loader import load_dataset
+from .observations.builder import build_observations
+# from initialization.init import initialize
+# from optimization.ba import optimize
+# from evaluation.metrics import evaluate
+
+config = {
+    "dataset": {
+        "name": "replica",
+        "path": "/home/adam/scratch/datasets/replica/Replica",
+        "sequence": "office0",
+        "stride": 10,
+        "max_frames": 100
+    },
+    "optimizer": {
+        # optimizer config here
+    }
+}
 
 def run_experiment(config):
-    images, depths, poses, K = load_dataset(config)
+    dataset = load_dataset(config) # returns Dataset
 
-    observations = build_observations(images, depths, config)
+    observations = build_observations(dataset, config)
 
-    state0 = initialize(observations, poses, K, config)
+    # state0 = initialize(observations, config)
+    # result = optimize(state0, observations, config.optimizer)
 
-    result = optimize(state0, observations, config.optimizer)
+    # metrics = evaluate(result, config)
 
-    metrics = evaluate(result, config)
+    # return metrics
 
-    return metrics
+if __name__ == "__main__":
+    run_experiment(config)

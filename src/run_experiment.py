@@ -11,7 +11,7 @@ config = {
         "path": "/home/adam/scratch/datasets/replica/Replica",
         "sequence": "office0",
         "stride": 5,
-        "max_frames": 1000
+        "max_frames": 100
     },
     "optimizer": {
         # optimizer config here

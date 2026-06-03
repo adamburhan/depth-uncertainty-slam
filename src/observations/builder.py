@@ -44,6 +44,29 @@ def run_colmap_frontend(database_path, image_path, cam):
     verification_options.compute_relative_pose = True
     pycolmap.match_exhaustive(database_path, verification_options=verification_options)
 
+def floater_diagnostic(rec, frame_id_to_frame, img_id_to_frame_id, rel_thresh=0.15):
+    """A landmark is a reprojection-invisible floater if its depth-in-camera
+    disagrees with the GT surface depth across its views, despite low reproj error
+    (which everything triangulation kept already has)."""
+    n_floaters, n_total = 0, 0
+    for lm_id, p3d in rec.points3D.items():
+        errs = []
+        for e in p3d.track.elements:
+            im = rec.images[e.image_id]
+            z_pred = (im.cam_from_world() * p3d.xyz)[2]          # landmark depth in this camera
+            frame = frame_id_to_frame[img_id_to_frame_id[e.image_id]]
+            uv = im.points2D[e.point2D_idx].xy
+            u, v = int(np.floor(uv[0])), int(np.floor(uv[1]))
+            d_gt = float(frame.depth[v, u])
+            if d_gt > 0:
+                errs.append(abs(z_pred - d_gt) / d_gt)            # relative depth error
+        if errs:
+            n_total += 1
+            if max(errs) > rel_thresh:                            # off the surface in >=1 view
+                n_floaters += 1
+    print(f"reprojection-invisible floaters: {n_floaters} / {n_total} "
+          f"({100*n_floaters/max(n_total,1):.1f}%)")
+
 def seed_reconstruction(cam, frames, name_to_img_id):
     rec = pycolmap.Reconstruction()
     camera = pycolmap.Camera.create_from_model_name(1, "PINHOLE", cam["fx"], cam["w"], cam["h"])
@@ -113,4 +136,7 @@ def build_observations(dataset, config):
             observations.extend(recs)
             landmark_xyz[lm_id] = p3d.xyz
     print(f"Landmarks: {len(landmark_xyz)}, observations: {len(observations)}")
+
+    floater_diagnostic(rec, frame_id_to_frame, img_id_to_frame_id)
+    assert len(set(img_id_to_frame_id.values())) == len(img_id_to_frame_id)
     return observations, landmark_xyz

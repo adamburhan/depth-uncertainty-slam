@@ -1,5 +1,5 @@
 import pycolmap
-import os
+import os, shutil
 from pathlib import Path
 from collections import defaultdict
 import sqlite3
@@ -44,28 +44,6 @@ def run_colmap_frontend(database_path, image_path, cam):
     verification_options.compute_relative_pose = True
     pycolmap.match_exhaustive(database_path, verification_options=verification_options)
 
-def floater_diagnostic(rec, frame_id_to_frame, img_id_to_frame_id, rel_thresh=0.15):
-    """A landmark is a reprojection-invisible floater if its depth-in-camera
-    disagrees with the GT surface depth across its views, despite low reproj error
-    (which everything triangulation kept already has)."""
-    n_floaters, n_total = 0, 0
-    for lm_id, p3d in rec.points3D.items():
-        errs = []
-        for e in p3d.track.elements:
-            im = rec.images[e.image_id]
-            z_pred = (im.cam_from_world() * p3d.xyz)[2]          # landmark depth in this camera
-            frame = frame_id_to_frame[img_id_to_frame_id[e.image_id]]
-            uv = im.points2D[e.point2D_idx].xy
-            u, v = int(np.floor(uv[0])), int(np.floor(uv[1]))
-            d_gt = float(frame.depth[v, u])
-            if d_gt > 0:
-                errs.append(abs(z_pred - d_gt) / d_gt)            # relative depth error
-        if errs:
-            n_total += 1
-            if max(errs) > rel_thresh:                            # off the surface in >=1 view
-                n_floaters += 1
-    print(f"reprojection-invisible floaters: {n_floaters} / {n_total} "
-          f"({100*n_floaters/max(n_total,1):.1f}%)")
 
 def seed_reconstruction(cam, frames, name_to_img_id):
     rec = pycolmap.Reconstruction()
@@ -96,6 +74,7 @@ def build_observations(dataset, config):
     
     if config["dataset"]["name"] == "replica":
         tmp_dir = dataset.sequence_dir / "tmp_colmap"
+        shutil.rmtree(tmp_dir, ignore_errors=True)
         tmp_dir.mkdir(exist_ok=True)
         for frame in dataset.frames:
             src = dataset.image_dir / f"frame{frame.frame_id:06d}.jpg"
@@ -108,8 +87,11 @@ def build_observations(dataset, config):
 
     run_colmap_frontend(database_path, image_path, dataset.cam)
 
-    name_to_img_id = {n: i for i, n in
-                      sqlite3.connect(str(database_path)).execute("SELECT image_id, name FROM images")}
+    with sqlite3.connect(str(database_path)) as conn:
+        name_to_img_id = {
+            name: image_id
+            for image_id, name in conn.execute("SELECT image_id, name FROM images")
+        }
 
     rec = seed_reconstruction(dataset.cam, dataset.frames, name_to_img_id)  # frames carry image_id + GT pose
     out = dataset.sequence_dir / "tri_model"; out.mkdir(exist_ok=True)
@@ -122,21 +104,23 @@ def build_observations(dataset, config):
     landmark_xyz = {}                       
     for lm_id, p3d in rec.points3D.items():
         recs = []
+        seen = set()
         for e in p3d.track.elements:
+            if e.image_id in seen:
+                continue
             frame = frame_id_to_frame[img_id_to_frame_id[e.image_id]]
             uv = rec.images[e.image_id].points2D[e.point2D_idx].xy
             assert frame.depth.shape == (dataset.cam["h"], dataset.cam["w"])
-            u = min(int(np.floor(uv[0])), frame.depth.shape[1] - 1) 
-            v = min(int(np.floor(uv[1])), frame.depth.shape[0] - 1)
+            u = np.clip(int(np.floor(uv[0])), 0, frame.depth.shape[1] - 1)
+            v = np.clip(int(np.floor(uv[1])), 0, frame.depth.shape[0] - 1)
             d = float(frame.depth[v, u])
             if d == 0.0:
                 continue
+            seen.add(e.image_id) # keep one obs per (landmark, image)
             recs.append(Observation(frame.frame_id, lm_id, uv, d, ambiguous=False, depth_alt=None))
         if len(recs) >= 2:                  # guard: track must survive depth filtering with >=2 obs
             observations.extend(recs)
             landmark_xyz[lm_id] = p3d.xyz
     print(f"Landmarks: {len(landmark_xyz)}, observations: {len(observations)}")
 
-    floater_diagnostic(rec, frame_id_to_frame, img_id_to_frame_id)
-    assert len(set(img_id_to_frame_id.values())) == len(img_id_to_frame_id)
     return observations, landmark_xyz

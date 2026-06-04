@@ -16,9 +16,16 @@ config = {
     },
     "optimizer": {
         # optimizer config here
-        "depth_model": "none",
+        "depth_model": "bimodal",
         "measurement_noise_sigma": 1.0,
         "depth_noise_sigma": 0.1,
+    },
+    "depth_hypotheses": {
+        "depth_patch_method": "largest_gap",
+        "patch_radius": 5,
+        "gap_thresh": 0.15,
+        "ambiguity_thresh": 0.20,
+        "min_valid": 10,
     }
 }
 

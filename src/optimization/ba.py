@@ -122,7 +122,6 @@ def optimize(state0, observations, optimizer_config):
                 )
             )
 
-
     # assign initial values
     initial = Values()
     for frame_id, pose in poses_dict.items():

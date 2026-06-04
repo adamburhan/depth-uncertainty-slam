@@ -5,6 +5,7 @@ from collections import defaultdict
 import sqlite3
 import numpy as np
 from dataclasses import dataclass
+from .depth_hypotheses import analyze_depth_patch
 
 @dataclass
 class Observation:
@@ -14,6 +15,7 @@ class Observation:
     depth: float          # depth at keypoint location
     ambiguous: bool       # near depth discontinuity
     depth_alt: float | None = None  # second depth hypothesis if ambiguous
+    ambiguity_score: float = 0.0
 
 def pair_id_to_image_ids(pair_id):
     """From colmap documentation: https://colmap.github.io/database.html"""
@@ -113,11 +115,21 @@ def build_observations(dataset, config):
             assert frame.depth.shape == (dataset.cam["h"], dataset.cam["w"])
             u = np.clip(int(np.floor(uv[0])), 0, frame.depth.shape[1] - 1)
             v = np.clip(int(np.floor(uv[1])), 0, frame.depth.shape[0] - 1)
-            d = float(frame.depth[v, u])
+            ambiguous, d, d_alt, score = analyze_depth_patch(frame.depth, u, v, config["depth_hypotheses"])
             if d == 0.0:
                 continue
             seen.add(e.image_id) # keep one obs per (landmark, image)
-            recs.append(Observation(frame.frame_id, lm_id, uv, d, ambiguous=False, depth_alt=None))
+            recs.append(
+                Observation(
+                    frame.frame_id, 
+                    lm_id, 
+                    uv, 
+                    d, 
+                    ambiguous=ambiguous, 
+                    depth_alt=d_alt,
+                    ambiguity_score=score
+                )
+            )
         if len(recs) >= 2:                  # guard: track must survive depth filtering with >=2 obs
             observations.extend(recs)
             landmark_xyz[lm_id] = p3d.xyz

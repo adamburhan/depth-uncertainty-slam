@@ -4,7 +4,7 @@ import numpy as np
 from collections import defaultdict
 from .initialization.init import initialize_state
 from .optimization.ba import optimize
-# from evaluation.metrics import evaluate
+from .evaluation.metrics import evaluate
 
 config = {
     "dataset": {
@@ -12,11 +12,11 @@ config = {
         "path": "/home/adam/scratch/datasets/replica/Replica",
         "sequence": "office0",
         "stride": 1,
-        "max_frames": 10
+        "max_frames": 100
     },
     "optimizer": {
         # optimizer config here
-        "depth_model": "bimodal",
+        "depth_model": "bimodal",  # "none", "drop_ambiguous", "bimodal"
         "measurement_noise_sigma": 1.0,
         "depth_noise_sigma": 0.1,
     },
@@ -28,8 +28,6 @@ config = {
         "min_valid": 10,
     }
 }
-
-
 
 def diagnose_ambiguity(observations, config):
     n = len(observations)
@@ -47,7 +45,6 @@ def diagnose_ambiguity(observations, config):
     n_with_alt = sum(1 for o in observations if o.depth_alt is not None)
     print(f"Have depth_alt: {n_with_alt}/{n} ({100*n_with_alt/n:.2f}%)")
 
-
 def run_experiment(config):
     dataset = load_dataset(config) # returns Dataset
 
@@ -57,11 +54,20 @@ def run_experiment(config):
 
     state0 = initialize_state(dataset, landmark_xyz)
 
-    result, metrics = optimize(state0, observations, config["optimizer"])
+    result, opt_metrics = optimize(state0, observations, config["optimizer"])
 
-    # metrics = evaluate(result, config)
+    eval_metrics = evaluate(result, observations, state0, dataset)
+    metrics = {**opt_metrics, **eval_metrics}
 
-    # return metrics
+    return metrics
 
 if __name__ == "__main__":
-    run_experiment(config)
+    metrics =  run_experiment(config)
+
+    for key, value in metrics.items():
+        if isinstance(value, dict):
+            print(f"{key}:")
+            for k, v in value.items():
+                print(f"  {k}: {v:.4f}" if isinstance(v, float) else f"  {k}: {v}")
+        else:
+            print(f"{key}: {value:.4f}")

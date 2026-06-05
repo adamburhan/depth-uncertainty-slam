@@ -22,6 +22,7 @@ def load_dataset(config):
             image_dir=seq_path / "results",
             K=K,
             cam=cam,
+            mesh_path=data_path / f"{sequence}_mesh.ply"
         )
     else:
         raise ValueError(f"Unsupported dataset: {dataset_name}")

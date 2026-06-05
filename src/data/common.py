@@ -16,3 +16,4 @@ class Dataset:
     image_dir: Path
     K: np.ndarray
     cam: dict
+    mesh_path: Path

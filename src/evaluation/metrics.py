@@ -18,12 +18,12 @@ def summary(d, thresholds=(0.05, 0.10)):
         out[f"floater_rate@{int(t*100)}cm"] = float((d > t).mean())
     return out
 
-def evaluate(result, observations, state0, dataset, out_dir=None, tag=None):
+def evaluate(result, observations, state0, mesh_path, out_dir=None, tag=None):
     lm_ids    = list(state0["landmarks"].keys())
     pts_final = np.stack([np.asarray(result.atPoint3(L(i))) for i in lm_ids])
     pts_init  = np.stack([np.asarray(state0["landmarks"][i]) for i in lm_ids])
 
-    mesh = trimesh.load(dataset.mesh_path, process=False)   # GT surface, same world frame as pinned poses
+    mesh = trimesh.load(mesh_path, process=False)   # GT surface, same world frame as pinned poses
 
     amb_lms = {o.landmark_id for o in observations if o.ambiguous}  # per-obs flag -> per-landmark
     mask = np.array([i in amb_lms for i in lm_ids])

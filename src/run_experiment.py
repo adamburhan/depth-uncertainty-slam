@@ -26,7 +26,10 @@ config = {
         "gap_thresh": 0.15,
         "ambiguity_thresh": 0.20,
         "min_valid": 10,
-    }
+    },
+    "output": {
+        "dir": "runs/office0_100",
+    },
 }
 
 def diagnose_ambiguity(observations, config):
@@ -56,7 +59,11 @@ def run_experiment(config):
 
     result, opt_metrics = optimize(state0, observations, config["optimizer"])
 
-    eval_metrics = evaluate(result, observations, state0, dataset)
+    eval_metrics = evaluate(
+        result, observations, state0, dataset,
+        out_dir=config["output"]["dir"],
+        tag=config["optimizer"]["depth_model"],
+    )
     metrics = {**opt_metrics, **eval_metrics}
 
     return metrics
